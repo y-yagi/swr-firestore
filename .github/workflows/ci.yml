@@ -29,3 +29,33 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+
+  integration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+          cache: 'pnpm'
+      # the firestore emulator is a jar, so it needs a JVM. ubuntu-latest ships
+      # one today, but pin it so a runner image change cannot break us.
+      - name: Use Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Cache the firestore emulator
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            firebase-emulators-${{ runner.os }}-
+      - name: Integration tests
+        run: pnpm test:integration

@@ -52,6 +52,14 @@ class CollectionCache {
     }
     return this.collections
   }
+
+  /**
+   * Drops everything. Only used to isolate tests from one another - this
+   * singleton is never reset during a normal app's lifetime.
+   */
+  clear() {
+    this.collections = {}
+  }
 }
 
 export const collectionCache = new CollectionCache()

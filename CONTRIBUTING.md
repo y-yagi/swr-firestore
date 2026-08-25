@@ -41,14 +41,53 @@ Note that a `file:` dependency links this directory as-is and does **not** run
 
 ## Tests
 
-Unit tests live in `src/__tests__`. The hook tests mock `firebase/firestore`
-rather than talking to a real backend or emulator. When you touch the query
-building or listener code, add a case there — the mocked SDK makes it cheap.
+There are two suites, split as vitest projects:
 
-One thing to keep in mind: the real Firestore never invokes an `onSnapshot`
-callback synchronously, and `createListenerAsync` relies on that (it resolves
-its promise with the `unsubscribe` handle the callback closes over). Mocks must
-defer the callback, e.g. with `queueMicrotask`.
+| suite | where | what |
+| --- | --- | --- |
+| `pnpm test` | `src/__tests__/*.test.{ts,tsx}` | jsdom, `firebase/firestore` mocked. Fast, no Java. |
+| `pnpm test:integration` | `src/__tests__/integration/` | the real Firestore emulator |
+
+`pnpm test:all` runs both. `pnpm test` is deliberately kept emulator-free so the
+common loop stays fast and needs no JVM.
+
+### Unit tests
+
+The real Firestore never invokes an `onSnapshot` callback synchronously, and
+`createListenerAsync` relies on that (it resolves its promise with the
+`unsubscribe` handle the callback closes over). Mocks must defer the callback,
+e.g. with `queueMicrotask`.
+
+### Integration tests
+
+These run against the Firestore emulator, which is a jar — you need a **JVM**
+installed. `pnpm test:integration` wraps vitest in `firebase emulators:exec`, so
+it starts and stops the emulator for you. To poke at it by hand:
+
+```sh
+pnpm firebase emulators:start --only firestore --project demo-swr-firestore
+```
+
+The project id is `demo-swr-firestore`; a `demo-` prefix never resolves to a
+real Firebase project, so these tests cannot touch live resources.
+
+Things worth knowing before adding a case here:
+
+- **They run in the `node` environment, not jsdom, for everything that does not
+  need React.** The firebase JS SDK has known failures against the emulator
+  under jsdom ([firebase-js-sdk#8137](https://github.com/firebase/firebase-js-sdk/issues/8137),
+  [#9267](https://github.com/firebase/firebase-js-sdk/issues/9267)). The hook
+  tests do opt into jsdom, via a `// @vitest-environment jsdom` docblock, and
+  have been stable — but that is the first place to look if they turn flaky.
+- **Do not give `SWRConfig` a custom `provider`.** Listeners push updates
+  through swr's global `mutate`, so a scoped cache never sees them and the
+  realtime assertions hang. Tests isolate themselves with `uniquePath()`
+  instead of a scoped cache.
+- Files run serially (`fileParallelism: false`) since they share one emulator.
+
+The point of this suite is to catch what a mock cannot: whether the query we
+build is actually *accepted* by Firestore. For example, dropping the `orderBy`
+constraint while keeping cursors passes every unit test and fails here.
 
 ## Releasing
 

@@ -920,6 +920,23 @@ Whoa, `isHungry` is now true. But what happens to the original document query? W
 
 That means that **if you somehow fetch the same document twice, the latest version will update everywhere.**
 
+## Caveat: this library uses swr's global cache
+
+Realtime listeners, the cross-query document sync, and the standalone `set` /
+`update` / `deleteDocument` helpers all write through swr's **global** `mutate`.
+
+That means a custom cache provider does not see them:
+
+```jsx
+// ⚠️ with a custom provider, `listen: true` will render the first snapshot
+// and then never update
+<SWRConfig value={{ provider: () => new Map() }}>
+```
+
+Everything else about `SWRConfig` is fine — this only applies to `provider`.
+Leave it unset (the default global cache) if you use realtime subscriptions or
+the standalone mutation helpers.
+
 ## Breaking changes in 1.0
 
 Coming from `0.16.x`, which was built on the firebase v7/v8 namespaced API:
