@@ -1,5 +1,11 @@
 # SWR + Firestore
 
+> **This is a maintenance fork of [nandorojo/swr-firestore](https://github.com/nandorojo/swr-firestore).**
+> Upstream stopped at firebase v8 in December 2021. This fork targets the
+> **modular firebase SDK (v10–v12)** and **swr 2**. See
+> [Breaking changes in 1.0](#breaking-changes-in-10) if you are coming from
+> `0.16.x`. Pull requests are not sent upstream.
+
 ```js
 const { data } = useDocument('users/fernando')
 ```
@@ -18,7 +24,6 @@ You can now fetch, add, and mutate Firestore data with zero boilerplate.
 
 - Shared state / cache between collection and document queries [(instead of Redux??)](#shared-global-state-between-documents-and-collections)
 - Works with both **React** and **React Native**.
-- Offline mode with Expo [(without detaching!)](https://github.com/nandorojo/expo-firestore-offline-persistence/blob/master/README.md#usage-with-nandorojoswr-firestore)
 - Blazing fast
 - Query collection groups (**new** in `0.14.x`!)
 - `set`, `update`, and `add` update your global cache, instantly
@@ -28,7 +33,8 @@ You can now fetch, add, and mutate Firestore data with zero boilerplate.
 - No more parsing `document.data()` from Firestore requests
 - Server-side rendering (SSR or SSG) with Next.js [(example)](https://github.com/nandorojo/swr-firestore/issues/17)
 - Automatic date parsing (no more `.toDate()`)
-- Firebase v8 support (see [#59](https://github.com/nandorojo/swr-firestore/issues/59#issuecomment-719950071))
+- Modular firebase SDK (v10–v12), so firestore is the only firebase bundle this library pulls in
+- No runtime dependencies of its own
 
 ...along with the features touted by Vercel's incredible [SWR](https://github.com/zeit/swr#introduction) library:
 
@@ -48,43 +54,44 @@ _"With SWR, components will get a stream of data updates constantly and automati
 
 ## ⭐️
 
-If you like this library, give it star and let me know on [Twitter](https://twitter.com/fernandotherojo)!
+The original library was written by [Fernando Rojo](https://twitter.com/fernandotherojo) —
+if you find it useful, go give [the upstream repo](https://github.com/nandorojo/swr-firestore) a star.
 
 ## Installation
 
-```sh
-yarn add @nandorojo/swr-firestore
-
-# or
-npm install @nandorojo/swr-firestore
-```
-
-Install firebase:
+This fork is not published to npm. Install it straight from GitHub, pinned to a tag:
 
 ```sh
-# if you're using expo:
-expo install firebase
-
-# if you aren't using expo:
-yarn add firebase
+pnpm add github:y-yagi/swr-firestore#v1.0.0
 # or
-npm i firebase
+yarn add @nandorojo/swr-firestore@github:y-yagi/swr-firestore#v1.0.0
+# or
+npm install github:y-yagi/swr-firestore#v1.0.0
 ```
+
+The package builds itself on install (via `prepare`), so nothing else is needed.
+
+`firebase`, `react`, and `swr` are peer dependencies — install them too:
+
+```sh
+pnpm add firebase swr react
+```
+
+| peer dependency | supported range |
+| --------------- | --------------- |
+| `firebase`      | `>=10`          |
+| `react`         | `>=17`          |
+| `swr`           | `^2.3.0`        |
 
 ## Set up
 
 In the root of your app, **create an instance of Fuego** and pass it to the **FuegoProvider**.
-
-If you're using Firebase v8, see [this solution](https://github.com/nandorojo/swr-firestore/issues/59#issuecomment-719950071) for creating your instance of `Fuego`.
 
 If you're using `next.js`, this goes in your `pages/_app.js` file.
 
 `App.js`
 
 ```jsx
-import React from 'react'
-import 'firebase/firestore'
-import 'firebase/auth'
 import { Fuego, FuegoProvider } from '@nandorojo/swr-firestore'
 
 const firebaseConfig = {
@@ -102,9 +109,19 @@ export default function App() {
 }
 ```
 
-Make sure to create your `Fuego` instance outside of the component. The only argument `Fuego` takes is your firebase `config` variable.
+Make sure to create your `Fuego` instance outside of the component.
 
-Under the hood, this step initializes firebase for you. No need to call `firebase.initializeApp`.
+Under the hood, this step calls `initializeApp` for you, and reuses the already
+initialized app if there is one. If your app initializes firebase itself, hand
+`Fuego` that `FirebaseApp` instead of a config:
+
+```js
+import { initializeApp } from 'firebase/app'
+import { Fuego } from '@nandorojo/swr-firestore'
+
+const app = initializeApp(firebaseConfig)
+const fuego = new Fuego(app)
+```
 
 ## Basic Usage
 
@@ -474,7 +491,10 @@ import {
   // these all update BOTH Firestore & the local cache ⚡️
   set, // set a firestore document
   update, // update a firestore document
+  deleteDocument, // delete a firestore document
   fuego, // get the firebase instance used by this lib
+  Fuego, // the class you instantiate in your app root
+  FuegoProvider,
   getCollection, // prefetch a collection, without being hooked into SWR or React
   getDocument, // prefetch a document, without being hooked into SWR or React
 } from '@nandorojo/swr-firestore'
@@ -525,7 +545,7 @@ if (data) {
 
 The `__snapshot` field is the exact snapshot returned by Firestore.
 
-See Firestore's [snapshot docs](https://firebase.google.com/docs/reference/js/firebase.firestore.QuerySnapshot) for more.
+See Firestore's [snapshot docs](https://firebase.google.com/docs/reference/js/firestore_.querysnapshot) for more.
 
 ### Return values
 
@@ -543,12 +563,18 @@ Returns a dictionary with the following values:
   - The function can be null, so make sure to check that it exists before calling it.
   - **Note**: This is not necessary to use. `useDocument` already unmounts the listener for you. This is only intended if you want to unsubscribe on your own.
 
-The dictionary also includes the following [from `useSWR`](https://github.com/zeit/swr#return-values):
+- `revalidate()`: refetches this document. `swr` 2 removed `swr.revalidate`, so
+  this is a thin wrapper over the bound `mutate()`.
+
+The dictionary also includes the following [from `useSWR`](https://swr.vercel.app/docs/api#return-values):
 
 - `data`: data for the given key resolved by fetcher (or undefined if not loaded)
 - `error`: error thrown by fetcher (or undefined)
+- `isLoading`: if there's an ongoing request and no "loaded data"
 - `isValidating`: if there's a request or revalidation loading
-- `mutate(data?, shouldRevalidate?)`: function to mutate the cached data
+- `mutate(data?, options?)`: function to mutate the cached data
+
+`loading` is still returned as a deprecated alias for `isLoading`.
 
 ## `useCollection(path, query, options)`
 
@@ -660,7 +686,7 @@ if (data) {
 
 The `__snapshot` field is the exact snapshot returned by Firestore.
 
-See Firestore's [snapshot docs](https://firebase.google.com/docs/reference/js/firebase.firestore.QuerySnapshot) for more.
+See Firestore's [snapshot docs](https://firebase.google.com/docs/reference/js/firestore_.querysnapshot) for more.
 
 #### `options`
 
@@ -673,12 +699,18 @@ Returns a dictionary with the following values:
 - `add(data)`: Extends the Firestore document [`add` function](https://firebase.google.com/docs/firestore/manage-data/add-data). Returns the added document ID(s).
   - It also updates the local cache using SWR's `mutate`. This will prove highly convenient over the regular `add` function provided by Firestore.
 
-The returned dictionary also includes the following [from `useSWR`](https://github.com/zeit/swr#return-values):
+- `revalidate()`: refetches this collection. `swr` 2 removed `swr.revalidate`,
+  so this is a thin wrapper over the bound `mutate()`.
+
+The returned dictionary also includes the following [from `useSWR`](https://swr.vercel.app/docs/api#return-values):
 
 - `data`: data for the given key resolved by fetcher (or undefined if not loaded)
 - `error`: error thrown by fetcher (or undefined)
+- `isLoading`: if there's an ongoing request and no "loaded data"
 - `isValidating`: if there's a request or revalidation loading
-- `mutate(data?, shouldRevalidate?)`: function to mutate the cached data
+- `mutate(data?, options?)`: function to mutate the cached data
+
+`loading` is still returned as a deprecated alias for `isLoading`.
 - `unsubscribe()` A function that, when called, unsubscribes the Firestore listener.
   - The function can be null, so make sure to check that it exists before calling it.
   - **Note**: This is not necessary to use. `useCollection` already unmounts the listener for you. This is only intended if you want to unsubscribe on your own.
@@ -715,7 +747,7 @@ This is useful if you want to `update` a document in a component that isn't conn
 Extends the Firestore document [`add` function](https://firebase.google.com/docs/firestore/manage-data/add-data).
 
 - It also updates the local cache using SWR's `mutate`. This will prove highly convenient over the regular `add` function.
-- Use this **instead** of `firebase.firestore().collection('users').add(data)`
+- Use this **instead** of `addDoc(collection(db, 'users'), data)`
 -->
 
 ## `deleteDocument(path, ignoreLocalMutations = false)`
@@ -742,16 +774,23 @@ Refetch a collection query from Firestore, and update the local cache. Useful if
 
 The current firebase instance used by this library. Exports the following fields:
 
-- `db`: the current firestore collection instance
-- `auth`: the `firebase.auth` variable.
+- `app`: the `FirebaseApp` this library initialized (or was handed)
+- `db`: the modular `Firestore` instance
 
 ```js
 import { fuego } from '@nandorojo/swr-firestore'
+import { doc, getDoc } from 'firebase/firestore'
+import { getAuth } from 'firebase/auth'
 
-fuego.db.doc('users/Fernando').get()
+await getDoc(doc(fuego.db, 'users/Fernando'))
 
-fuego.auth().currentUser?.uid
+getAuth(fuego.app).currentUser?.uid
 ```
+
+`fuego.auth`, `fuego.functions`, and `fuego.storage` were removed in 1.0 — with
+the modular SDK you call `getAuth(fuego.app)` / `getFunctions(fuego.app)` /
+`getStorage(fuego.app)` yourself, which also keeps those bundles out of apps
+that don't use them.
 
 ## `getDocument(path, options?)`
 
@@ -880,6 +919,38 @@ Whoa, `isHungry` is now true. But what happens to the original document query? W
 `swr-firestore` uses document `id` fields to sync any collection queries with existing document queries across your app.
 
 That means that **if you somehow fetch the same document twice, the latest version will update everywhere.**
+
+## Breaking changes in 1.0
+
+Coming from `0.16.x`, which was built on the firebase v7/v8 namespaced API:
+
+**firebase**
+
+- `firebase >= 10` is now a peer dependency, and the modular SDK is required.
+  There is no `firebase/compat` path.
+- `fuego.db` is a modular `Firestore` instance, not a v8 `firebase.firestore.Firestore`.
+  Calls like `fuego.db.collection('users').doc(id).set(data)` become
+  `setDoc(doc(fuego.db, 'users', id), data)`.
+- `fuego.auth`, `fuego.functions`, and `fuego.storage` were removed. Use
+  `getAuth(fuego.app)` and friends. `fuego.app` is new.
+- `Fuego` also accepts an existing `FirebaseApp`.
+- Anywhere you used `firebase.firestore.FieldValue.serverTimestamp()`, import
+  `serverTimestamp` from `firebase/firestore` instead.
+
+**swr**
+
+- `swr ^2.3.0` is now a peer dependency rather than a bundled dependency, so
+  your app and this library share one cache. Add `swr` to your own dependencies.
+- Hooks return `isLoading`; `loading` remains as a deprecated alias.
+- `revalidate()` is still returned, now implemented on top of `mutate()`.
+
+**packaging**
+
+- The React Native specific build (`@react-native-community/bob`, the podspec,
+  the `react-native` field pointing at `src`) is gone. The package ships plain
+  CJS + ESM builds with an `exports` map, which Metro and every bundler resolve.
+- `lodash.get` / `lodash.set` are no longer used, and the package now has no
+  runtime dependencies.
 
 ## License
 

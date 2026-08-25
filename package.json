@@ -20,8 +20,9 @@
   },
   "sideEffects": false,
   "files": [
+    "lib",
     "src",
-    "lib"
+    "!src/__tests__"
   ],
   "scripts": {
     "build": "pnpm run clean && tsc -p tsconfig.build.cjs.json && tsc -p tsconfig.build.esm.json && node scripts/write-type-markers.mjs",
