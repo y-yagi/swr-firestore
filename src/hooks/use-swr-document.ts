@@ -1,15 +1,27 @@
-import useSWR, { mutate, ConfigInterface } from 'swr'
-import type { SetOptions, FieldValue } from '@firebase/firestore-types'
-import { fuego } from '../context'
-import { useRef, useEffect, useCallback } from 'react'
-import { empty } from '../helpers/empty'
-import { AllowType, Document } from '../types/Document'
-import { collectionCache } from '../classes/Cache'
-import { isDev } from '../helpers/is-dev'
-import { withDocumentDatesParsed } from '../helpers/doc-date-parser'
-import { deleteDocument } from './static-mutations'
+import {
+  doc,
+  getDoc,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+  type DocumentData,
+  type FieldValue,
+  type SetOptions,
+  type Unsubscribe,
+  type UpdateData,
+} from 'firebase/firestore'
+import { useCallback, useEffect, useRef } from 'react'
+import useSWR, { mutate, type SWRConfiguration } from 'swr'
 
- 
+import { collectionCache } from '../classes/Cache.js'
+import { fuego } from '../context/index.js'
+import { withDocumentDatesParsed } from '../helpers/doc-date-parser.js'
+import { empty } from '../helpers/empty.js'
+import { isDev } from '../helpers/is-dev.js'
+import { shouldMerge } from '../helpers/set-options.js'
+import type { AllowType, Document } from '../types/Document.js'
+import { deleteDocument } from './static-mutations.js'
+
 type Options<Doc extends Document = Document> = {
   /**
    * If `true`, sets up a real-time subscription to the Firestore backend.
@@ -36,11 +48,11 @@ type Options<Doc extends Document = Document> = {
    * Default: `true`
    */
   ignoreFirestoreDocumentSnapshotField?: boolean
-} & ConfigInterface<Doc | null>
+} & SWRConfiguration<Doc | null>
 
 type ListenerReturnType<Doc extends Document = Document> = {
   initialData: Doc
-  unsubscribe: ReturnType<ReturnType<typeof fuego['db']['doc']>['onSnapshot']>
+  unsubscribe: Unsubscribe
 }
 
 export const getDocument = async <Doc extends Document = Document>(
@@ -61,38 +73,32 @@ export const getDocument = async <Doc extends Document = Document>(
      * Default: `true`
      */
     ignoreFirestoreDocumentSnapshotField?: boolean
-  } = empty.object
+  } = empty.object,
 ) => {
-  const data = await fuego.db
-    .doc(path)
-    .get()
-    .then(doc => {
-      const docData =
-        doc.data({
-          serverTimestamps: 'estimate',
-        }) ?? empty.object
-      if (
-        isDev &&
-        // @ts-ignore
-        (docData.exists || docData.id || docData.hasPendingWrites)
-      ) {
-        console.warn(
-          '[get-document] warning: Your document, ',
-          doc.id,
-          ' is using one of the following reserved fields: [exists, id, hasPendingWrites]. These fields are reserved. Please remove them from your documents.'
-        )
-      }
-      return withDocumentDatesParsed(
-        ({
-          ...docData,
-          id: doc.id,
-          exists: doc.exists,
-          hasPendingWrites: doc.metadata.hasPendingWrites,
-          __snapshot: ignoreFirestoreDocumentSnapshotField ? undefined : doc,
-        } as unknown) as Doc,
-        parseDates
-      )
-    })
+  const snapshot = await getDoc(doc(fuego.db, path))
+  const docData =
+    snapshot.data({ serverTimestamps: 'estimate' }) ?? empty.object
+  if (
+    isDev &&
+    // @ts-ignore
+    (docData.exists || docData.id || docData.hasPendingWrites)
+  ) {
+    console.warn(
+      '[get-document] warning: Your document, ',
+      snapshot.id,
+      ' is using one of the following reserved fields: [exists, id, hasPendingWrites]. These fields are reserved. Please remove them from your documents.',
+    )
+  }
+  const data = withDocumentDatesParsed(
+    {
+      ...docData,
+      id: snapshot.id,
+      exists: snapshot.exists(),
+      hasPendingWrites: snapshot.metadata.hasPendingWrites,
+      __snapshot: ignoreFirestoreDocumentSnapshotField ? undefined : snapshot,
+    } as unknown as Doc,
+    parseDates,
+  )
 
   // update the document in any collections listening to the same document
   let collection: string | string[] = path.split(`/${data.id}`)
@@ -103,9 +109,9 @@ export const getDocument = async <Doc extends Document = Document>(
     collectionCache.getSWRKeysFromCollectionPath(collection).forEach(key => {
       mutate(
         key,
-        (currentState: Doc[] = empty.array): Doc[] => {
+        (currentState: Doc[] = empty.array as Doc[]): Doc[] => {
           // don't mutate the current state if it doesn't include this doc
-          if (!currentState.some(doc => doc.id === data.id)) {
+          if (!currentState.some(document => document.id === data.id)) {
             return currentState
           }
           return currentState.map(document => {
@@ -115,7 +121,7 @@ export const getDocument = async <Doc extends Document = Document>(
             return document
           })
         },
-        false
+        { revalidate: false },
       )
     })
   }
@@ -139,22 +145,24 @@ const createListenerAsync = async <Doc extends Document = Document>(
      * Default: `false`
      */
     ignoreFirestoreDocumentSnapshotField?: boolean
-  } = {}
+  } = {},
 ): Promise<ListenerReturnType<Doc>> => {
   return await new Promise(resolve => {
-    const unsubscribe = fuego.db.doc(path).onSnapshot(doc => {
-      const docData = doc.data() ?? empty.object
+    const unsubscribe = onSnapshot(doc(fuego.db, path), snapshot => {
+      const docData = snapshot.data() ?? empty.object
       const data = withDocumentDatesParsed<Doc>(
-        ({
+        {
           ...docData,
-          id: doc.id,
-          exists: doc.exists,
-          hasPendingWrites: doc.metadata.hasPendingWrites,
-          __snapshot: ignoreFirestoreDocumentSnapshotField ? undefined : doc,
-        } as unknown) as Doc,
-        parseDates
+          id: snapshot.id,
+          exists: snapshot.exists(),
+          hasPendingWrites: snapshot.metadata.hasPendingWrites,
+          __snapshot: ignoreFirestoreDocumentSnapshotField
+            ? undefined
+            : snapshot,
+        } as unknown as Doc,
+        parseDates,
       )
-      mutate(path, data, false)
+      mutate(path, data, { revalidate: false })
       if (
         isDev &&
         // @ts-ignore
@@ -162,14 +170,14 @@ const createListenerAsync = async <Doc extends Document = Document>(
       ) {
         console.warn(
           '[use-document] warning: Your document, ',
-          doc.id,
-          ' is using one of the following reserved fields: [exists, id, hasPendingWrites]. These fields are reserved. Please remove them from your documents.'
+          snapshot.id,
+          ' is using one of the following reserved fields: [exists, id, hasPendingWrites]. These fields are reserved. Please remove them from your documents.',
         )
       }
 
       // update the document in any collections listening to the same document
       let collection: string | string[] = path
-        .split(`/${doc.id}`)
+        .split(`/${snapshot.id}`)
         .filter(Boolean)
       collection.pop() // remove last item, which is the /id
       collection = collection.join('/')
@@ -180,9 +188,13 @@ const createListenerAsync = async <Doc extends Document = Document>(
           .forEach(key => {
             mutate(
               key,
-              (currentState: Doc[] = empty.array): Doc[] => {
+              (currentState: Doc[] = empty.array as Doc[]): Doc[] => {
                 // don't mutate the current state if it doesn't include this doc
-                if (!currentState.some(doc => doc.id && doc.id === data.id)) {
+                if (
+                  !currentState.some(
+                    document => document.id && document.id === data.id,
+                  )
+                ) {
                   return currentState
                 }
                 return currentState.map(document => {
@@ -192,7 +204,7 @@ const createListenerAsync = async <Doc extends Document = Document>(
                   return document
                 })
               },
-              false
+              { revalidate: false },
             )
           })
       }
@@ -208,12 +220,12 @@ const createListenerAsync = async <Doc extends Document = Document>(
 
 export const useDocument = <
   Data extends object = {},
-  Doc extends Document = Document<Data>
+  Doc extends Document = Document<Data>,
 >(
   path: string | null,
-  options: Options<Doc> = empty.object
+  options: Options<Doc> = empty.object,
 ) => {
-  const unsubscribeRef = useRef<ListenerReturnType['unsubscribe'] | null>(null)
+  const unsubscribeRef = useRef<Unsubscribe | null>(null)
   const {
     listen = false,
     parseDates,
@@ -262,32 +274,44 @@ export const useDocument = <
 
   const swr = useSWR<Doc | null>(
     path,
-    async (path: string) => {
+    async (fetchPath: string) => {
       if (shouldListen.current) {
         if (unsubscribeRef.current) {
           unsubscribeRef.current()
           unsubscribeRef.current = null
         }
         const { unsubscribe, initialData } = await createListenerAsync<Doc>(
-          path,
+          fetchPath,
           {
             parseDates: datesToParse.current,
             ignoreFirestoreDocumentSnapshotField: shouldIgnoreSnapshot.current,
-          }
+          },
         )
         unsubscribeRef.current = unsubscribe
         return initialData
       }
-      const data = await getDocument<Doc>(path, {
+      const data = await getDocument<Doc>(fetchPath, {
         parseDates: datesToParse.current,
         ignoreFirestoreDocumentSnapshotField: shouldIgnoreSnapshot.current,
       })
       return data
     },
-    swrOptions
+    swrOptions,
   )
 
-  const { data, isValidating, revalidate, mutate: connectedMutate, error } = swr
+  const { data, isLoading, isValidating, mutate: connectedMutate, error } = swr
+
+  /**
+   * Refetches this document. `swr.revalidate` was removed in swr 2, so this is
+   * built on top of the bound `mutate`.
+   */
+  const revalidate = useCallback(() => connectedMutate(), [connectedMutate])
+
+  // this MUST be declared before the effect below so the ref is populated.
+  const revalidateRef = useRef(revalidate)
+  useEffect(() => {
+    revalidateRef.current = revalidate
+  })
 
   // if listen changes,
   // we run revalidate.
@@ -304,13 +328,6 @@ export const useDocument = <
     if (mounted.current) revalidateRef.current()
     else mounted.current = true
   }, [listen])
-
-  // this MUST be after the previous effect to avoid duplicate initial validations.
-  // only happens on updates, not initial mount.
-  const revalidateRef = useRef(swr.revalidate)
-  useEffect(() => {
-    revalidateRef.current = swr.revalidate
-  })
 
   useEffect(() => {
     return () => {
@@ -337,7 +354,7 @@ export const useDocument = <
         // @ts-ignore
         connectedMutate((prevState = empty.object) => {
           // default we set merge to be false. this is annoying, but follows Firestore's preference.
-          if (!options?.merge) return data
+          if (!shouldMerge(options)) return data
           return {
             ...prevState,
             ...data,
@@ -345,9 +362,12 @@ export const useDocument = <
         })
       }
       if (!path) return null
-      return fuego.db.doc(path).set(data, options)
+      const ref = doc(fuego.db, path)
+      return options
+        ? setDoc(ref, data as DocumentData, options)
+        : setDoc(ref, data as DocumentData)
     },
-    [path, listen, connectedMutate]
+    [path, listen, connectedMutate],
   )
 
   /**
@@ -367,9 +387,9 @@ export const useDocument = <
         })
       }
       if (!path) return null
-      return fuego.db.doc(path).update(data)
+      return updateDoc(doc(fuego.db, path), data as UpdateData<DocumentData>)
     },
-    [listen, path, connectedMutate]
+    [listen, path, connectedMutate],
   )
 
   const connectedDelete = useCallback(() => {
@@ -378,13 +398,17 @@ export const useDocument = <
 
   return {
     data,
+    isLoading,
     isValidating,
     revalidate,
     mutate: connectedMutate,
     error,
     set,
     update,
-    loading: !data && !error,
+    /**
+     * @deprecated use `isLoading` instead. Kept for backwards compatibility.
+     */
+    loading: isLoading,
     deleteDocument: connectedDelete,
     /**
      * A function that, when called, unsubscribes the Firestore listener.
@@ -393,27 +417,6 @@ export const useDocument = <
      *
      * **Note**: This is not necessary to use. `useDocument` already unmounts the listener for you. This is only intended if you want to unsubscribe on your own.
      */
-    unsubscribe: unsubscribeRef.current
+    unsubscribe: unsubscribeRef.current,
   }
 }
-
-// const useSubscription = (path: string) => {
-//   const unsubscribeRef = useRef<
-//     ReturnType<typeof createListener>['unsubscribe'] | null
-//   >(null)
-
-//   const swr = useSWR([path], path => {
-//     const { unsubscribe, latestData } = createListener(path)
-//     unsubscribeRef.current = unsubscribe
-//     return latestData()
-//   })
-
-//   useEffect(() => {
-//     return () => {
-//       if (unsubscribeRef.current) {
-//         unsubscribeRef.current()
-//       }
-//     }
-//   }, [path])
-//   return swr
-// }

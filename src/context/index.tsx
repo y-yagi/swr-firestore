@@ -1,6 +1,5 @@
-import React, { useContext } from 'react'
-import { createContext, ReactNode } from 'react'
-import { Fuego } from '../classes/Fuego'
+import { createContext, useContext, type ReactNode } from 'react'
+import { Fuego } from '../classes/Fuego.js'
 
 type Context = {
   fuego: Fuego

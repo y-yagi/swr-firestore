@@ -1,41 +1,52 @@
-import useSWR, { mutate as mutateStatic, ConfigInterface } from 'swr'
-import { fuego } from '../context'
-import { useRef, useEffect, useMemo, useCallback } from 'react'
-// import { useMemoOne as useMemo } from 'use-memo-one'
-import { empty } from '../helpers/empty'
-import { collectionCache } from '../classes/Cache'
-
-// type Document<T = {}> = T & { id: string }
-
 import {
-  FieldPath,
-  OrderByDirection,
-  WhereFilterOp,
-  Query,
-} from '@firebase/firestore-types'
-import { isDev } from '../helpers/is-dev'
-import { withDocumentDatesParsed } from '../helpers/doc-date-parser'
-import { Document } from '../types'
+  collection,
+  collectionGroup,
+  doc,
+  endAt as endAtConstraint,
+  endBefore as endBeforeConstraint,
+  getDocs,
+  limit as limitConstraint,
+  onSnapshot,
+  orderBy as orderByConstraint,
+  query as buildQuery,
+  startAfter as startAfterConstraint,
+  startAt as startAtConstraint,
+  where as whereConstraint,
+  writeBatch,
+  type DocumentData,
+  type FieldPath,
+  type OrderByDirection,
+  type Query,
+  type QueryConstraint,
+  type Unsubscribe,
+  type WhereFilterOp,
+} from 'firebase/firestore'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import useSWR, { mutate as mutateStatic, type SWRConfiguration } from 'swr'
+
+import { collectionCache } from '../classes/Cache.js'
+import { fuego } from '../context/index.js'
+import { withDocumentDatesParsed } from '../helpers/doc-date-parser.js'
+import { empty } from '../helpers/empty.js'
+import { isDev } from '../helpers/is-dev.js'
+import type { Document } from '../types/index.js'
 
 type KeyHack = string & {} // hack to also allow strings
 
 // here we get the "key" from our data, to add intellisense for any "orderBy" in the queries and such.
 type OrderByArray<Doc extends object = {}, Key = keyof Doc> = [
   Key | FieldPath | KeyHack,
-  OrderByDirection
+  OrderByDirection,
 ]
 type OrderByItem<Doc extends object = {}, Key = keyof Doc> =
-  | OrderByArray<Doc>
-  | Key
-  | KeyHack
+  OrderByArray<Doc> | Key | KeyHack
 type OrderByType<Doc extends object = {}> =
-  | OrderByItem<Doc>
-  | OrderByArray<Doc>[]
+  OrderByItem<Doc> | OrderByArray<Doc>[]
 
 type WhereItem<Doc extends object = {}, Key = keyof Doc> = [
   Key | FieldPath | KeyHack,
   WhereFilterOp,
-  unknown
+  unknown,
 ]
 type WhereArray<Doc extends object = {}> = WhereItem<Doc>[]
 type WhereType<Doc extends object = {}> = WhereItem<Doc> | WhereArray<Doc>
@@ -70,17 +81,10 @@ export type CollectionQueryType<Doc extends object = {}> = {
    * **TODO** allow DocumentSnapshot here too. This will probably be used with a useStaticCollection hook in the future.
    */
   endBefore?: number
-
-  // THESE ARE NOT JSON SERIALIZABLE
-  // startAt?: number | DocumentSnapshot
-  // endAt?: number | DocumentSnapshot
-  // startAfter?: number | DocumentSnapshot
-  // endBefore?: number | DocumentSnapshot
 }
 
 export const getCollection = async <Doc extends Document = Document>(
   path: string,
-  // queryString: string = '{}',
   query: CollectionQueryType<Doc> = {},
   {
     parseDates,
@@ -93,42 +97,38 @@ export const getCollection = async <Doc extends Document = Document>(
      * Default: `false`
      */
     ignoreFirestoreDocumentSnapshotField?: boolean
-  } = empty.object
+  } = empty.object,
 ) => {
   const ref = createFirestoreRef(path, query)
-  const data: Doc[] = await ref.get().then(querySnapshot => {
-    const array: typeof data = []
-    querySnapshot.forEach(doc => {
-      const docData =
-        doc.data({
-          serverTimestamps: 'estimate',
-        }) ?? empty.object
-      const docToAdd = withDocumentDatesParsed(
-        {
-          ...docData,
-          id: doc.id,
-          exists: doc.exists,
-          hasPendingWrites: doc.metadata.hasPendingWrites,
-          __snapshot: ignoreFirestoreDocumentSnapshotField ? undefined : doc,
-        } as any,
-        parseDates
+  const querySnapshot = await getDocs(ref)
+  const data: Doc[] = []
+  querySnapshot.forEach(document => {
+    const docData =
+      document.data({ serverTimestamps: 'estimate' }) ?? empty.object
+    const docToAdd = withDocumentDatesParsed(
+      {
+        ...docData,
+        id: document.id,
+        exists: document.exists(),
+        hasPendingWrites: document.metadata.hasPendingWrites,
+        __snapshot: ignoreFirestoreDocumentSnapshotField ? undefined : document,
+      } as any,
+      parseDates,
+    )
+    // update individual docs in the cache
+    mutateStatic(document.ref.path, docToAdd, { revalidate: false })
+    if (
+      isDev &&
+      // @ts-ignore
+      (docData.exists || docData.id || docData.hasPendingWrites)
+    ) {
+      console.warn(
+        '[get-collection] warning: Your document, ',
+        document.id,
+        ' is using one of the following reserved fields: [exists, id, hasPendingWrites]. These fields are reserved. Please remove them from your documents.',
       )
-      // update individual docs in the cache
-      mutateStatic(doc.ref.path, docToAdd, false)
-      if (
-        isDev &&
-        // @ts-ignore
-        (docData.exists || docData.id || docData.hasPendingWrites)
-      ) {
-        console.warn(
-          '[get-collection] warning: Your document, ',
-          doc.id,
-          ' is using one of the following reserved fields: [exists, id, hasPendingWrites]. These fields are reserved. Please remove them from your documents.'
-        )
-      }
-      array.push(docToAdd)
-    })
-    return array
+    }
+    data.push(docToAdd)
   })
   return data
 }
@@ -144,75 +144,81 @@ const createFirestoreRef = <Doc extends object = {}>(
     startAfter,
     endBefore,
     isCollectionGroup,
-  }: CollectionQueryType<Doc>
-) =>
-  // { isCollectionGroup = false }: { isCollectionGroup?: boolean } = empty.object
-  {
-    let ref: Query = fuego.db.collection(path)
+  }: CollectionQueryType<Doc>,
+): Query<DocumentData> => {
+  const baseRef: Query<DocumentData> = isCollectionGroup
+    ? collectionGroup(fuego.db, path)
+    : collection(fuego.db, path)
 
-    if (isCollectionGroup) {
-      ref = fuego.db.collectionGroup(path)
+  const constraints: QueryConstraint[] = []
+
+  if (where) {
+    function multipleConditions(w: WhereType<Doc>): w is WhereArray<Doc> {
+      return !!(w as WhereArray) && Array.isArray(w[0])
     }
-
-    if (where) {
-      function multipleConditions(w: WhereType<Doc>): w is WhereArray<Doc> {
-        return !!(w as WhereArray) && Array.isArray(w[0])
-      }
-      if (multipleConditions(where)) {
-        where.forEach(w => {
-          ref = ref.where(w[0] as string | FieldPath, w[1], w[2])
-        })
-      } else if (typeof where[0] === 'string' && typeof where[1] === 'string') {
-        ref = ref.where(where[0], where[1], where[2])
-      }
+    if (multipleConditions(where)) {
+      where.forEach(w => {
+        constraints.push(
+          whereConstraint(w[0] as string | FieldPath, w[1], w[2]),
+        )
+      })
+    } else if (where.length === 3) {
+      // length check rather than `typeof where[0] === 'string'`, so that a
+      // FieldPath (e.g. documentId()) in a single clause is not dropped
+      constraints.push(
+        whereConstraint(where[0] as string | FieldPath, where[1], where[2]),
+      )
     }
-
-    if (orderBy) {
-      if (typeof orderBy === 'string') {
-        ref = ref.orderBy(orderBy)
-      } else if (Array.isArray(orderBy)) {
-        function multipleOrderBy(
-          o: OrderByType<Doc>
-        ): o is OrderByArray<Doc>[] {
-          return Array.isArray((o as OrderByArray<Doc>[])[0])
-        }
-        if (multipleOrderBy(orderBy)) {
-          orderBy.forEach(([order, direction]) => {
-            ref = ref.orderBy(order as string | FieldPath, direction)
-          })
-        } else {
-          const [order, direction] = orderBy
-          ref = ref.orderBy(order as string | FieldPath, direction)
-        }
-      }
-    }
-
-    if (startAt) {
-      ref = ref.startAt(startAt)
-    }
-
-    if (endAt) {
-      ref = ref.endAt(endAt)
-    }
-
-    if (startAfter) {
-      ref = ref.startAfter(startAfter)
-    }
-
-    if (endBefore) {
-      ref = ref.endBefore(endBefore)
-    }
-
-    if (limit) {
-      ref = ref.limit(limit)
-    }
-
-    return ref
   }
+
+  if (orderBy) {
+    if (typeof orderBy === 'string') {
+      constraints.push(orderByConstraint(orderBy))
+    } else if (Array.isArray(orderBy)) {
+      function multipleOrderBy(o: OrderByType<Doc>): o is OrderByArray<Doc>[] {
+        return Array.isArray((o as OrderByArray<Doc>[])[0])
+      }
+      if (multipleOrderBy(orderBy)) {
+        orderBy.forEach(([order, direction]) => {
+          constraints.push(
+            orderByConstraint(order as string | FieldPath, direction),
+          )
+        })
+      } else {
+        const [order, direction] = orderBy
+        constraints.push(
+          orderByConstraint(order as string | FieldPath, direction),
+        )
+      }
+    }
+  }
+
+  if (typeof startAt === 'number') {
+    constraints.push(startAtConstraint(startAt))
+  }
+
+  if (typeof endAt === 'number') {
+    constraints.push(endAtConstraint(endAt))
+  }
+
+  if (typeof startAfter === 'number') {
+    constraints.push(startAfterConstraint(startAfter))
+  }
+
+  if (typeof endBefore === 'number') {
+    constraints.push(endBeforeConstraint(endBefore))
+  }
+
+  if (typeof limit === 'number') {
+    constraints.push(limitConstraint(limit))
+  }
+
+  return constraints.length ? buildQuery(baseRef, ...constraints) : baseRef
+}
 
 type ListenerReturnType<Doc extends Document = Document> = {
   initialData: Doc[] | null
-  unsubscribe: ReturnType<ReturnType<typeof fuego['db']['doc']>['onSnapshot']>
+  unsubscribe: Unsubscribe
 }
 
 const createListenerAsync = async <Doc extends Document = Document>(
@@ -221,8 +227,7 @@ const createListenerAsync = async <Doc extends Document = Document>(
   {
     parseDates,
     ignoreFirestoreDocumentSnapshotField = true,
-  }: // isCollectionGroup = false,
-  {
+  }: {
     parseDates?: (string | keyof Doc)[]
     /**
      * If `true`, docs returned in `data` will not include the firestore `__snapshot` field. If `false`, it will include a `__snapshot` field. This lets you access the document snapshot, but makes the document not JSON serializable.
@@ -230,31 +235,30 @@ const createListenerAsync = async <Doc extends Document = Document>(
      * Default: `true`
      */
     ignoreFirestoreDocumentSnapshotField?: boolean
-  }
+  },
 ): Promise<ListenerReturnType<Doc>> => {
   return new Promise(resolve => {
     const query: CollectionQueryType = JSON.parse(queryString) ?? {}
     const ref = createFirestoreRef(path, query)
-    const unsubscribe = ref.onSnapshot(
+    const unsubscribe = onSnapshot(
+      ref,
       { includeMetadataChanges: true },
       querySnapshot => {
         const data: Doc[] = []
-        querySnapshot.forEach(doc => {
+        querySnapshot.forEach(document => {
           const docData =
-            doc.data({
-              serverTimestamps: 'estimate',
-            }) ?? empty.object
+            document.data({ serverTimestamps: 'estimate' }) ?? empty.object
           const docToAdd = withDocumentDatesParsed(
             {
               ...docData,
-              id: doc.id,
-              exists: doc.exists,
-              hasPendingWrites: doc.metadata.hasPendingWrites,
+              id: document.id,
+              exists: document.exists(),
+              hasPendingWrites: document.metadata.hasPendingWrites,
               __snapshot: ignoreFirestoreDocumentSnapshotField
                 ? undefined
-                : doc,
+                : document,
             } as any,
-            parseDates
+            parseDates,
           )
           if (
             isDev &&
@@ -263,12 +267,12 @@ const createListenerAsync = async <Doc extends Document = Document>(
           ) {
             console.warn(
               '[use-collection] warning: Your document, ',
-              doc.id,
-              ' is using one of the following reserved fields: [exists, id, hasPendingWrites]. These fields are reserved. Please remove them from your documents.'
+              document.id,
+              ' is using one of the following reserved fields: [exists, id, hasPendingWrites]. These fields are reserved. Please remove them from your documents.',
             )
           }
           // update individual docs in the cache
-          mutateStatic(doc.ref.path, docToAdd, false)
+          mutateStatic(document.ref.path, docToAdd, { revalidate: false })
           data.push(docToAdd)
         })
         // resolve initial data
@@ -277,15 +281,15 @@ const createListenerAsync = async <Doc extends Document = Document>(
           unsubscribe,
         })
         // update on listener fire
-        mutateStatic([path, queryString], data, false)
-      }
+        mutateStatic([path, queryString], data, { revalidate: false })
+      },
     )
   })
 }
 
-export type CollectionSWROptions<
-  Doc extends Document = Document
-> = ConfigInterface<Doc[] | null>
+export type CollectionSWROptions<Doc extends Document = Document> =
+  SWRConfiguration<Doc[] | null>
+
 /**
  * Call a Firestore Collection
  * @template Doc
@@ -295,7 +299,7 @@ export type CollectionSWROptions<
  */
 export const useCollection = <
   Data extends object = {},
-  Doc extends Document = Document<Data>
+  Doc extends Document = Document<Data>,
 >(
   path: string | null,
   query: CollectionQueryType<Data> & {
@@ -320,9 +324,9 @@ export const useCollection = <
      */
     ignoreFirestoreDocumentSnapshotField?: boolean
   } = empty.object,
-  options: CollectionSWROptions<Doc> = empty.object
+  options: CollectionSWROptions<Doc> = empty.object,
 ) => {
-  const unsubscribeRef = useRef<ListenerReturnType['unsubscribe'] | null>(null)
+  const unsubscribeRef = useRef<Unsubscribe | null>(null)
 
   const {
     where,
@@ -334,7 +338,6 @@ export const useCollection = <
     limit,
     listen = false,
     parseDates,
-    // __unstableCollectionGroup: isCollectionGroup = false,
     isCollectionGroup,
     ignoreFirestoreDocumentSnapshotField = true,
   } = query
@@ -382,19 +385,8 @@ export const useCollection = <
       startAfter,
       startAt,
       where,
-    ]
+    ],
   )
-
-  // we move this to a Ref
-  // why? because we shouldn't have to include it in the key
-  // if we do, then calling mutate() won't be consistent for all
-  // collections with the same path & query
-  // TODO figure out if this is the right behavior...probably not because of the paths. hm.
-  // TODO it's not, move this to the
-  // const isCollectionGroupQuery = useRef(isCollectionGroup)
-  // useEffect(() => {
-  //   isCollectionGroupQuery.current = isCollectionGroup
-  // }, [isCollectionGroup])
 
   const dateParser = useRef(parseDates)
   useEffect(() => {
@@ -418,38 +410,53 @@ export const useCollection = <
   const swr = useSWR<Doc[] | null>(
     // if the path is null, this means we don't want to fetch yet.
     path === null ? null : [path, memoQueryString],
-    async (path: string, queryString: string) => {
+    // swr 2 passes array keys to the fetcher as a single argument
+    async ([fetchPath, queryString]: [string, string]) => {
       if (shouldListen.current) {
         if (unsubscribeRef.current) {
           unsubscribeRef.current()
           unsubscribeRef.current = null
         }
         const { unsubscribe, initialData } = await createListenerAsync<Doc>(
-          path,
+          fetchPath,
           queryString,
           {
             parseDates: dateParser.current,
             ignoreFirestoreDocumentSnapshotField: shouldIgnoreSnapshot.current,
-          }
+          },
         )
         unsubscribeRef.current = unsubscribe
         return initialData
       }
 
       const data = await getCollection<Doc>(
-        path,
+        fetchPath,
         JSON.parse(queryString) as CollectionQueryType<Doc>,
         {
           parseDates: dateParser.current,
           ignoreFirestoreDocumentSnapshotField: shouldIgnoreSnapshot.current,
-        }
+        },
       )
       return data
     },
-    swrOptions
+    swrOptions,
   )
 
-  // if listen or changes,
+  const { data, isLoading, isValidating, mutate, error } = swr
+
+  /**
+   * Refetches this query. `swr.revalidate` was removed in swr 2, so this is
+   * built on top of the bound `mutate`.
+   */
+  const revalidate = useCallback(() => mutate(), [mutate])
+
+  // this MUST be declared before the effect below so the ref is populated.
+  const revalidateRef = useRef(revalidate)
+  useEffect(() => {
+    revalidateRef.current = revalidate
+  })
+
+  // if listen changes,
   // we run revalidate.
   // This triggers SWR to fetch again
   // Why? because we don't want to put listen
@@ -460,21 +467,11 @@ export const useCollection = <
   // and we call `revalidate` if it changes.
   const mounted = useRef(false)
   useEffect(() => {
-    // TODO should this only happen if listen is false? No, BC swr should revalidate on a change.
     if (mounted.current) revalidateRef.current()
     else mounted.current = true
   }, [listen])
 
-  // this MUST be after the previous effect to avoid duplicate initial validations.
-  // only happens on updates, not initial mounting
-  const revalidateRef = useRef(swr.revalidate)
   useEffect(() => {
-    revalidateRef.current = swr.revalidate
-  })
-
-  useEffect(() => {
-    // TODO should this only be for listen, since SWR updates with the others?
-    // also should it go before the useSWR?
     return () => {
       // clean up listener on unmount if it exists
       if (unsubscribeRef.current) {
@@ -482,7 +479,7 @@ export const useCollection = <
         unsubscribeRef.current = null
       }
     }
-    // should depend on the path, queyr, and listen being the same...
+    // should depend on the path, query, and listen being the same...
   }, [path, listen, memoQueryString])
 
   // add the collection to the cache,
@@ -491,45 +488,46 @@ export const useCollection = <
     if (path) collectionCache.addCollectionToCache(path, memoQueryString)
   }, [path, memoQueryString])
 
-  const { data, isValidating, revalidate, mutate, error } = swr
-
   /**
    * `add(data)`: Extends the Firestore document [`add` function](https://firebase.google.com/docs/firestore/manage-data/add-data).
    * - It also updates the local cache using SWR's `mutate`. This will prove highly convenient over the regular `add` function provided by Firestore.
    */
   const add = useCallback(
     <T extends Data | Data[]>(
-      data: T
+      data: T,
     ): Promise<T extends Data ? string : string[]> | null => {
       if (!path) return null
 
       const multiple = Array.isArray(data)
-      const dataArray = multiple ? (data as T[]) : [data]
+      const dataArray = multiple ? (data as Data[]) : [data as Data]
 
-      const ref = fuego.db.collection(path)
+      const ref = collection(fuego.db, path)
 
-      const docsToAdd: Doc[] = (dataArray.map(doc => ({
-        ...doc,
+      const docsToAdd: Doc[] = dataArray.map(document => ({
+        ...document,
         // generate IDs we can use that in the local cache that match the server
-        id: ref.doc().id,
-      })) as unknown) as Doc[] // solve this annoying TS bug 😅
+        id: doc(ref).id,
+      })) as unknown as Doc[] // solve this annoying TS bug 😅
 
       // add to cache
       if (!listen) {
         // we only update the local cache if we don't have a listener set up
         // why? because Firestore automatically handles this part for subscriptions
-        mutate(prevState => {
-          const state = prevState ?? empty.array
-          return [...state, ...docsToAdd]
-        }, false)
+        mutate(
+          prevState => {
+            const state = prevState ?? (empty.array as Doc[])
+            return [...state, ...docsToAdd]
+          },
+          { revalidate: false },
+        )
       }
 
       // add to network
-      const batch = fuego.db.batch()
+      const batch = writeBatch(fuego.db)
 
-      docsToAdd.forEach(({ id, ...doc }) => {
+      docsToAdd.forEach(({ id, ...document }) => {
         // take the ID out of the document
-        batch.set(ref.doc(id), doc)
+        batch.set(doc(ref, id), document)
       })
 
       return batch.commit().then(() => {
@@ -539,17 +537,21 @@ export const useCollection = <
         return returnValue as T extends Data ? string : string[]
       })
     },
-    [listen, mutate, path]
+    [listen, mutate, path],
   )
 
   return {
     data,
+    isLoading,
     isValidating,
     revalidate,
     mutate,
     error,
     add,
-    loading: !data && !error,
+    /**
+     * @deprecated use `isLoading` instead. Kept for backwards compatibility.
+     */
+    loading: isLoading,
     /**
      * A function that, when called, unsubscribes the Firestore listener.
      *

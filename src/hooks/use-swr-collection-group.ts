@@ -1,9 +1,9 @@
-import { Document } from '../types'
+import { Document } from '../types/index.js'
 import {
   CollectionQueryType,
   CollectionSWROptions,
   useCollection,
-} from './use-swr-collection'
+} from './use-swr-collection.js'
 
 // type UseCollection = Parameters<typeof useCollection>
 
@@ -13,14 +13,14 @@ import {
  */
 export const useExperimentalCollectionGroup = <
   Data extends object = {},
-  Doc extends Document = Document<Data>
+  Doc extends Document = Document<Data>,
 >(
   collection: string | null,
   query: Omit<CollectionQueryType<Data>, 'isCollectionGroup'>,
-  swrOptions: CollectionSWROptions<Doc>
+  swrOptions: CollectionSWROptions<Doc>,
 ) => {
   console.warn(
-    '[swr-firestore] useExperimentalCollectionGroup is deprecated. Switch to useCollectionGroup.'
+    '[swr-firestore] useExperimentalCollectionGroup is deprecated. Switch to useCollectionGroup.',
   )
   return useCollection<Data>(
     collection,
@@ -28,17 +28,17 @@ export const useExperimentalCollectionGroup = <
       ...query,
       isCollectionGroup: true,
     },
-    swrOptions as any
+    swrOptions as any,
   )
 }
 
 export const useCollectionGroup = <
   Data extends object = {},
-  Doc extends Document = Document<Data>
+  Doc extends Document = Document<Data>,
 >(
   collection: string | null,
   query: Omit<CollectionQueryType<Data>, 'isCollectionGroup'>,
-  swrOptions: CollectionSWROptions<Doc>
+  swrOptions: CollectionSWROptions<Doc>,
 ) => {
   return useCollection<Data>(
     collection,
@@ -46,6 +46,6 @@ export const useCollectionGroup = <
       ...query,
       isCollectionGroup: true,
     },
-    swrOptions as any
+    swrOptions as any,
   )
 }
