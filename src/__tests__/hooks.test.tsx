@@ -255,6 +255,60 @@ describe('useCollection', () => {
     expect(firestore.query).toHaveBeenCalledOnce()
   })
 
+  it('keeps numeric cursors that are 0', async () => {
+    firestore.getDocs.mockResolvedValue(querySnapshot([]))
+
+    const { result } = renderHook(
+      () =>
+        useCollection('users', {
+          orderBy: 'age',
+          startAt: 0,
+          endAt: 0,
+          startAfter: 0,
+          endBefore: 0,
+          limit: 0,
+        }),
+      { wrapper },
+    )
+
+    await waitFor(() => expect(result.current.data).toBeTruthy())
+    // 0 is a legitimate cursor value; a truthy check would drop these and
+    // silently return the whole collection
+    expect(firestore.startAt).toHaveBeenCalledWith(0)
+    expect(firestore.endAt).toHaveBeenCalledWith(0)
+    expect(firestore.startAfter).toHaveBeenCalledWith(0)
+    expect(firestore.endBefore).toHaveBeenCalledWith(0)
+    expect(firestore.limit).toHaveBeenCalledWith(0)
+  })
+
+  it('keeps a single where clause that uses a FieldPath', async () => {
+    firestore.getDocs.mockResolvedValue(querySnapshot([]))
+    const fieldPath = { _internalPath: '__name__' }
+
+    const { result } = renderHook(
+      () =>
+        useCollection('users', {
+          where: [fieldPath as never, '==', 'fernando'],
+        }),
+      { wrapper },
+    )
+
+    await waitFor(() => expect(result.current.data).toBeTruthy())
+    expect(firestore.where).toHaveBeenCalledWith(fieldPath, '==', 'fernando')
+  })
+
+  it('ignores a malformed where clause', async () => {
+    firestore.getDocs.mockResolvedValue(querySnapshot([]))
+
+    const { result } = renderHook(
+      () => useCollection('users', { where: [] as never }),
+      { wrapper },
+    )
+
+    await waitFor(() => expect(result.current.data).toBeTruthy())
+    expect(firestore.where).not.toHaveBeenCalled()
+  })
+
   it('accepts multiple where clauses', async () => {
     firestore.getDocs.mockResolvedValue(querySnapshot([]))
 

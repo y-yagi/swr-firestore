@@ -944,6 +944,16 @@ Coming from `0.16.x`, which was built on the firebase v7/v8 namespaced API:
 - Hooks return `isLoading`; `loading` remains as a deprecated alias.
 - `revalidate()` is still returned, now implemented on top of `mutate()`.
 
+**queries**
+
+- Numeric query options are now gated on `typeof x === 'number'` rather than on
+  truthiness, so `startAt` / `endAt` / `startAfter` / `endBefore` of `0` are
+  applied instead of silently dropped. The same applies to `limit`, and since
+  Firestore rejects `limit(0)` outright, passing `limit: 0` now raises a clear
+  Firestore error rather than quietly fetching the entire collection.
+- A single `where` clause keyed by a `FieldPath` (e.g. `documentId()`) is now
+  applied. It used to be dropped, which returned the whole collection.
+
 **packaging**
 
 - The React Native specific build (`@react-native-community/bob`, the podspec,

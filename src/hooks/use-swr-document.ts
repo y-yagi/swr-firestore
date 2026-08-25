@@ -18,6 +18,7 @@ import { fuego } from '../context/index.js'
 import { withDocumentDatesParsed } from '../helpers/doc-date-parser.js'
 import { empty } from '../helpers/empty.js'
 import { isDev } from '../helpers/is-dev.js'
+import { shouldMerge } from '../helpers/set-options.js'
 import type { AllowType, Document } from '../types/Document.js'
 import { deleteDocument } from './static-mutations.js'
 
@@ -353,7 +354,7 @@ export const useDocument = <
         // @ts-ignore
         connectedMutate((prevState = empty.object) => {
           // default we set merge to be false. this is annoying, but follows Firestore's preference.
-          if (!options || !('merge' in options) || !options.merge) return data
+          if (!shouldMerge(options)) return data
           return {
             ...prevState,
             ...data,

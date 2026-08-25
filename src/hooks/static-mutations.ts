@@ -12,6 +12,7 @@ import { mutate } from 'swr'
 import { collectionCache } from '../classes/Cache.js'
 import { fuego } from '../context/index.js'
 import { empty } from '../helpers/empty.js'
+import { shouldMerge } from '../helpers/set-options.js'
 import type { Document } from '../types/Document.js'
 
 const isDocumentPath = (path: string) =>
@@ -57,7 +58,7 @@ const set = <Data extends object = {}, Doc extends Document = Document<Data>>(
 data: ${JSON.stringify(data)}`,
     )
 
-  const merge = !!options && 'merge' in options && options.merge
+  const merge = shouldMerge(options)
 
   if (!ignoreLocalMutation) {
     mutate(

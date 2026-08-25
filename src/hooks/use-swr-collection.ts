@@ -162,9 +162,11 @@ const createFirestoreRef = <Doc extends object = {}>(
           whereConstraint(w[0] as string | FieldPath, w[1], w[2]),
         )
       })
-    } else if (typeof where[0] === 'string' && typeof where[1] === 'string') {
+    } else if (where.length === 3) {
+      // length check rather than `typeof where[0] === 'string'`, so that a
+      // FieldPath (e.g. documentId()) in a single clause is not dropped
       constraints.push(
-        whereConstraint(where[0], where[1] as WhereFilterOp, where[2]),
+        whereConstraint(where[0] as string | FieldPath, where[1], where[2]),
       )
     }
   }
@@ -191,23 +193,23 @@ const createFirestoreRef = <Doc extends object = {}>(
     }
   }
 
-  if (startAt) {
+  if (typeof startAt === 'number') {
     constraints.push(startAtConstraint(startAt))
   }
 
-  if (endAt) {
+  if (typeof endAt === 'number') {
     constraints.push(endAtConstraint(endAt))
   }
 
-  if (startAfter) {
+  if (typeof startAfter === 'number') {
     constraints.push(startAfterConstraint(startAfter))
   }
 
-  if (endBefore) {
+  if (typeof endBefore === 'number') {
     constraints.push(endBeforeConstraint(endBefore))
   }
 
-  if (limit) {
+  if (typeof limit === 'number') {
     constraints.push(limitConstraint(limit))
   }
 
