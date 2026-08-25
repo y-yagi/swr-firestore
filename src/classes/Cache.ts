@@ -1,4 +1,4 @@
-import { empty } from '../helpers/empty'
+import { empty } from '../helpers/empty.js'
 
 type Collections = {
   [path: string]: {
@@ -20,30 +20,24 @@ class CollectionCache {
   }
 
   getSWRKeysFromCollectionPath(path: string) {
-    const isCollection =
-      path
-        .trim()
-        .split('/')
-        .filter(Boolean).length %
-        2 !==
-      0
+    const isCollection = path.trim().split('/').filter(Boolean).length % 2 !== 0
     if (!isCollection) {
       console.error(
-        `[fuego-swr-keys-from-collection-path] error: Passed a path that was not a collection to useCollection: ${path}.`
+        `[fuego-swr-keys-from-collection-path] error: Passed a path that was not a collection to useCollection: ${path}.`,
       )
     }
     return (
       this.collections[path]
         ?.map(({ key }) =>
           // if the queryString is undefined, take it out of the array
-          key.filter(keyItem => typeof keyItem === 'string')
+          key.filter(keyItem => typeof keyItem === 'string'),
         )
         .filter(Boolean) ?? empty.array
     )
   }
   addCollectionToCache(path: string, queryString?: string) {
     const collectionAlreadyExistsInCache = this.collections[path]?.some(
-      ({ key }) => key[0] === path && key[1] === queryString
+      ({ key }) => key[0] === path && key[1] === queryString,
     )
     if (!collectionAlreadyExistsInCache) {
       this.collections = {
